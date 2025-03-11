@@ -1,6 +1,7 @@
-use std::fs;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 // this is type aliasing
@@ -21,20 +22,49 @@ const PG_APP_MAX_CONN: u32 = 5;
 const SQL_DIR: &str = "sql/";
 const SQL_RECREATE: &str = "sql/00_recreate_db.sql";
 
-pub async fn init_db() -> Result<Db, sqlx::Error>{
-
+pub async fn init_db() -> Result<Db, sqlx::Error> {
     // CREATE a root db on with the DEV
     {
-        let root_db = new_db(PG_POOL_HOST,PG_POOL_DB,PG_POOL_ROOT_USER,PG_POOL_PWD,1).await?;
-        pg_exec(&root_db,SQL_RECREATE).await?;
+        let root_db = new_db(PG_POOL_HOST, PG_POOL_DB, PG_POOL_ROOT_USER, PG_POOL_PWD, 1).await?;
+        pg_exec(&root_db, SQL_RECREATE).await?;
     }
 
+    // we need to create the app db
+    let app_db = new_db(
+        PG_POOL_HOST,
+        PG_APP_DB,
+        PG_APP_USER,
+        PG_APP_PWD,
+        PG_APP_MAX_CONN,
+    )
+    .await?;
+    // here we will go through the directory and get the paths
+    let mut path_buf: Vec<PathBuf> = fs::read_dir(SQL_DIR)?
+        .into_iter()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    path_buf.sort();
+    // after we got the paths we will execute the files
+    for path in path_buf {
+        if let Some(path) = path.to_str() {
+            if path.ends_with(".sql") && path != SQL_RECREATE {
+                pg_exec(&app_db, &path).await?;
+            }
+        }
+    }
 
     // returning the app db
-    new_db(PG_POOL_HOST,PG_APP_DB,PG_APP_USER,PG_APP_PWD,1).await
+    new_db(
+        PG_POOL_HOST,
+        PG_APP_DB,
+        PG_APP_USER,
+        PG_APP_PWD,
+        PG_APP_MAX_CONN,
+    )
+    .await
 }
 
-async fn  pg_exec(db: &Db, file: &str) -> Result<(),sqlx::Error > {
+async fn pg_exec(db: &Db, file: &str) -> Result<(), sqlx::Error> {
     // the 00 - > file will be executed as root
     // next 2 will be executed as pg admin
     // read the file
@@ -49,7 +79,10 @@ async fn  pg_exec(db: &Db, file: &str) -> Result<(),sqlx::Error > {
     for sql in sql_queries {
         match sqlx::query(sql).execute(db).await {
             Ok(_) => (),
-            Err(err) => println!("The error is model_db in {} file and the reason {}", file, err)
+            Err(err) => println!(
+                "The error is model_db in {} file and the reason {}",
+                file, err
+            ),
         }
     }
 
@@ -64,7 +97,8 @@ async fn new_db(
     pwd: &str,
     max_conn: u32,
 ) -> Result<Db, sqlx::Error> {
-    let conn_str = format!("postgres://{}:{}@{}:{}/{}", user, pwd, host,5433,db);
+    // here the postgres port opens when run allows you to choose your db and password along with the port to listen to
+    let conn_str = format!("postgres://{}:{}@{}:{}/{}", user, pwd, host, 5433, db);
     PgPoolOptions::new()
         .max_connections(max_conn)
         .acquire_timeout(Duration::from_millis(500))
@@ -72,7 +106,6 @@ async fn new_db(
         .await
 }
 
-
 #[cfg(test)]
-#[path="../_tests/model_db.rs"]
+#[path = "../_tests/model_db.rs"]
 mod tests;
